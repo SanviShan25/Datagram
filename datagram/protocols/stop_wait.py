@@ -5,15 +5,6 @@ from datagram.protocols.base import ARQProtocol
 
 CHUNK = 1024
 
-"""
-# TEMPORARY: remove when Sanvi's channel lands on main.
-class RawChannel:
-    def __init__(self, sock, peer):
-        self.sock, self.peer = sock, peer
-
-    def send(self, data):
-        self.sock.sendto(data, self.peer)
-"""
 
 def split_file(path, chunk_size=CHUNK):
     """Return a list of byte strings of at most chunk_size bytes.
@@ -35,12 +26,14 @@ class StopAndWait(ARQProtocol):
     def __init__(self, sock, channel, rto=0.5, max_retries=10,
                  idle_timeout=5.0, linger=None):
         self.sock = sock
-        self.channel = channel          # anything with .send(bytes)
-        self.rto = rto                  # seconds, fixed for now
-        self.max_retries = max_retries  # total transmissions per packet
+        self.channel = channel            # anything with .send(bytes)
+        self.rto = rto                    # seconds, fixed for now
+        self.max_retries = max_retries    # total transmissions per packet
         self.idle_timeout = idle_timeout  # receiver: max silence before giving up
-        # receiver: how long to stay up after the FIN to re-ACK repeated FINs
-        self.linger = 3 * rto if linger is None else linger
+        # Receiver: after the FIN, stay up until this much SILENCE has passed,
+        # re-ACKing repeated FINs. The window slides: each repeated FIN restarts
+        # it. 10*rto means ~10 consecutive lost FINs are needed to strand the sender.
+        self.linger = 10 * rto if linger is None else linger
         self._reset_stats()
 
     def _reset_stats(self):
@@ -51,7 +44,7 @@ class StopAndWait(ARQProtocol):
         # duplicate packets received (and re-ACKed).
         self.stats = {"packets_sent": 0, "retransmissions": 0}
 
-    #sender
+    # ------------------------------------------------------------ sender
     def _send_and_wait(self, pkt):
         """Send one packet; return only when its ACK arrives.
 
@@ -116,7 +109,7 @@ class StopAndWait(ARQProtocol):
             "elapsed_s": elapsed,
         }
 
-    #receiver
+    # ---------------------------------------------------------- receiver
     def _send_ack(self, seq):
         """ACK carries ack=seq of the packet being acknowledged."""
         self.channel.send(Packet(seq=0, ack=seq, flags=ACK).pack())
@@ -173,8 +166,9 @@ class StopAndWait(ARQProtocol):
 
         elapsed = time.monotonic() - start  # measured BEFORE lingering
 
-        # Linger: if our FIN ACK was lost, the sender retransmits the FIN.
-        # Keep answering it so the sender does not fail on a finished transfer.
+        # Sliding linger: if our FIN ACK was lost, the sender keeps
+        # retransmitting the FIN. Keep answering until `linger` seconds of
+        # silence. Each repeated FIN restarts the window.
         end = time.monotonic() + self.linger
         while True:
             remaining = end - time.monotonic()
@@ -187,6 +181,7 @@ class StopAndWait(ARQProtocol):
             if pkt is not None and (pkt.flags & FIN) and pkt.seq == fin_seq:
                 self.stats["retransmissions"] += 1
                 self._send_ack(pkt.seq)
+                end = time.monotonic() + self.linger   # slide the window
 
         return {
             "packets_sent": self.stats["packets_sent"],
