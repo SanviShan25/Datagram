@@ -80,12 +80,41 @@ print(estimator.current_rto())
 
 Times are represented as numeric values; the source's demonstration uses seconds.
 
+## Packet Format and ACK Semantics
+
+*Status: proposed on 2026-10-12, pending confirmation from all four members. Remove this line once everyone has agreed.*
+
+All three ARQ protocols (Stop-and-Wait, Go-Back-N, Selective Repeat) share one packet format and one set of conventions. The format is implemented in `datagram/packet.py`.
+
+### Header (15 bytes, network byte order)
+
+| Field | Type | Meaning |
+|---|---|---|
+| `seq` | uint32 | Index of this packet |
+| `ack` | uint32 | Which packet is being acknowledged |
+| `flags` | uint8 | bit0 = `DATA`, bit1 = `ACK`, bit2 = `FIN` |
+| `payload_len` | uint16 | Number of data bytes after the header |
+| `checksum` | uint32 | CRC32 over the header (checksum field zeroed) and the payload |
+
+### Conventions
+
+1. **Sequence numbers** count packets, not bytes, and start at 0.
+2. **ACK meaning:**
+   - Stop-and-Wait and Selective Repeat: `ack = N` means packet N specifically arrived.
+   - Go-Back-N: `ack = N` means every packet up to and including N arrived in order (cumulative).
+3. **End of file** is signalled by a final packet with the `FIN` flag and an empty payload. This also covers an empty file (zero `DATA` packets, then `FIN`).
+4. **Payload size** is 1024 bytes per packet.
+5. **Sending** goes through `channel.send(raw_bytes)`, including ACKs, because ACKs can be lost too. Receiving uses `sock.recvfrom(2048)`.
+6. **Corrupt packets:** `Packet.unpack` returns `None` for a corrupt, truncated or padded packet. Receivers and senders ignore these.
+7. **Stats:** every protocol's `send_file` and `receive_file` returns a dict with the keys `packets_sent`, `retransmissions`, `bytes_delivered` and `elapsed_s`. The experiment harness reads these by name.
+
 ## Contributors
 
 Git commit history identifies these contributors:
 
 - Sanvi Shan
 - Shilpa Kumari
+- Samridhya Mukherjee
 
 ## Future Enhancements
 
