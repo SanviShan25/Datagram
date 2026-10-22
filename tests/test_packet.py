@@ -50,3 +50,17 @@ def test_truncated_payload_is_rejected():
 
 def test_empty_bytes_is_rejected():
     assert Packet.unpack(b"") is None
+
+    import os
+import zlib
+from datagram.packet import crc32
+
+
+def test_crc32_known_vector():
+    assert crc32(b"123456789") == 0xCBF43926   # standard CRC-32 check value
+
+
+def test_crc32_matches_reference_implementation():
+    for n in (0, 1, 15, 100, 1039):
+        data = os.urandom(n)
+        assert crc32(data) == zlib.crc32(data) & 0xFFFFFFFF
