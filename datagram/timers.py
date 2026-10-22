@@ -11,10 +11,14 @@ class RTTTracker:
         # called for the first send AND for every resend
         self.sent_at[seq] = now
 
-    def on_timeout(self, seq):
-        # timer fired: this packet is now ambiguous, and back off
+    def on_timeout(self, seq, backoff=True):
+        # timer fired: this packet is now ambiguous(Karn's rule), and back off
         self.retransmitted.add(seq)
-        self.est.on_timeout()
+
+        # SR can expire several packets at once; the caller backs off
+        # only once per sweep by passing backoff=False for the rest
+        if backoff:
+            self.est.on_timeout()
 
     def on_ack(self, seq, now):
         # a duplicate or unknown ACK has nothing to measure
@@ -30,3 +34,11 @@ class RTTTracker:
 
         del self.sent_at[seq]                    # C: forget this packet
         self.retransmitted.discard(seq)
+
+    def test_timeout_without_backoff_marks_but_keeps_rto():
+        est, t = make()
+        t.on_send(1, 0.0)
+        est.on_rtt_sample(0.1)            # rto 0.3
+        t.on_timeout(1, backoff=False)
+        assert 1 in t.retransmitted
+        assert close(est.current_rto(), 0.3)

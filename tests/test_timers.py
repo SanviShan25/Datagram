@@ -58,3 +58,12 @@ def test_state_cleared_after_ack():
     t.on_ack(1, 0.5)
     assert 1 not in t.sent_at
     assert 1 not in t.retransmitted
+
+
+def test_timeout_without_backoff_marks_but_keeps_rto():
+    est, t = make()
+    t.on_send(1, 0.0)
+    est.on_rtt_sample(0.1)            # rto 0.3
+    t.on_timeout(1, backoff=False)
+    assert 1 in t.retransmitted
+    assert close(est.current_rto(), 0.3)
