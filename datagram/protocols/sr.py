@@ -53,6 +53,15 @@ class SRSender:
         # Case: deadline has passed and no ACK came -> resend ONLY this one
         # Case: acked packets have no deadline, so they are never resent
         return [s for s, d in self.deadline.items() if d <= now]
+    
+    def collect_timeouts(self, now):
+        """Return the seqs to resend. Backs off the RTO once, not per packet."""
+        due = sorted(self.expired(now))
+        for i, seq in enumerate(due):
+            # backoff only for the first expired packet; the rest are still
+            # marked as retransmitted (Karn's rule) but don't double the RTO again
+            self.tracker.on_timeout(seq, backoff=(i == 0))
+        return due
 
 class SRReceiver:
     """Selective Repeat receiver: pure logic, no sockets yet

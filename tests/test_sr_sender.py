@@ -45,3 +45,19 @@ def test_expired_lists_only_overdue_unacked_packets():
     s.on_ack(0, 0.1)
     assert s.expired(0.4) == []
     assert sorted(s.expired(0.5)) == [1, 2, 3]
+
+
+def test_burst_timeout_backs_off_only_once():
+    s = make()
+    fill_window(s)                     # 0..3, all due at 0.5
+    due = s.collect_timeouts(0.5)
+    assert due == [0, 1, 2, 3]
+    assert s.est.current_rto() == 1.0  # doubled once, not 8.0
+    assert all(q in s.tracker.retransmitted for q in due)
+
+
+def test_no_timeout_means_no_backoff():
+    s = make()
+    fill_window(s)
+    assert s.collect_timeouts(0.1) == []
+    assert s.est.current_rto() == 0.5
