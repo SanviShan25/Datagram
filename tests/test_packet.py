@@ -1,5 +1,8 @@
 # tests/test_packet.py
-from datagram.packet import Packet, DATA, ACK, FIN, HEADER_SIZE
+import os
+import zlib
+
+from datagram.packet import Packet, DATA, ACK, FIN, HEADER_SIZE, crc32
 
 
 def make_packet():
@@ -51,16 +54,13 @@ def test_truncated_payload_is_rejected():
 def test_empty_bytes_is_rejected():
     assert Packet.unpack(b"") is None
 
-    import os
-import zlib
-from datagram.packet import crc32
-
 
 def test_crc32_known_vector():
     assert crc32(b"123456789") == 0xCBF43926   # standard CRC-32 check value
 
 
 def test_crc32_matches_reference_implementation():
+    # zlib is used here ONLY as a reference answer to check our own crc32
     for n in (0, 1, 15, 100, 1039):
         data = os.urandom(n)
         assert crc32(data) == zlib.crc32(data) & 0xFFFFFFFF
