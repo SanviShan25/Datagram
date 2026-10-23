@@ -5,6 +5,7 @@ import pytest
 
 from datagram.channel import Channel
 from datagram.protocols.stop_wait import StopAndWait
+from datagram.rto import RTOEstimator
 
 RTO = 0.1
 
@@ -21,7 +22,7 @@ def test_sender_gives_up_after_max_retries(tmp_path, max_retries):
         peer = ("127.0.0.1", 9)  # nothing listening
         # Channel defaults (loss=0, corrupt=0) make it a pass-through.
         sw = StopAndWait(sock, Channel(sock, peer), rto=RTO,
-                         max_retries=max_retries)
+                         max_retries=max_retries, est=RTOEstimator(fixed=RTO))
 
         t0 = time.monotonic()
         with pytest.raises(TimeoutError) as excinfo:

@@ -8,7 +8,7 @@ import pytest
 
 from datagram.channel import Channel
 from datagram.protocols.stop_wait import StopAndWait
-
+from datagram.rto import RTOEstimator
 RTO = 0.05
 JOIN_TIMEOUT = 15  # seconds; a hung receiver fails the test instead of hanging it
 
@@ -37,7 +37,7 @@ def run(tmp_path, size, loss, corrupt, seed):
         s_chan = Channel(s_sock, r_addr, seed=seed, loss=loss, corrupt=corrupt)
         r_chan = Channel(r_sock, s_addr, seed=seed + 1, loss=loss, corrupt=corrupt)
 
-        sender = StopAndWait(s_sock, s_chan, rto=RTO, max_retries=60)
+        sender = StopAndWait(s_sock, s_chan, rto=RTO, max_retries=60, est=RTOEstimator(fixed=RTO))
         receiver = StopAndWait(r_sock, r_chan, rto=RTO, max_retries=60,
                                idle_timeout=5.0)
 

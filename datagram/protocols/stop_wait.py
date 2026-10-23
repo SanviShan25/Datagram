@@ -1,5 +1,7 @@
 import socket
 import time
+from datagram.rto import RTOEstimator
+from datagram.timers import RTTTracker
 from datagram.packet import Packet, DATA, ACK, FIN
 from datagram.protocols.base import ARQProtocol
 
@@ -24,9 +26,11 @@ def split_file(path, chunk_size=CHUNK):
 
 class StopAndWait(ARQProtocol):
     def __init__(self, sock, channel, rto=0.5, max_retries=10,
-                 idle_timeout=5.0, linger=None):
+                 idle_timeout=5.0, linger=None, est=None):
         self.sock = sock
         self.channel = channel            # anything with .send(bytes)
+        self.est = est or RTOEstimator()          # sender: RTT estimator for adaptive RTO
+        self.tracker = RTTTracker(self.est)
         self.rto = rto                    # seconds, fixed for now
         self.max_retries = max_retries    # total transmissions per packet
         self.idle_timeout = idle_timeout  # receiver: max silence before giving up
@@ -53,6 +57,8 @@ class StopAndWait(ARQProtocol):
         """
         raw = pkt.pack()
         for attempt in range(self.max_retries):
+            self.tracker.on_send(pkt.seq , time.monotonic())
+
             self.channel.send(raw)
             self.stats["packets_sent"] += 1
             if attempt > 0:
@@ -60,17 +66,26 @@ class StopAndWait(ARQProtocol):
 
             # Deadline is computed ONCE per attempt. Every recvfrom gets only
             # the time remaining, so junk or stale ACKs cannot postpone it.
-            deadline = time.monotonic() + self.rto
+            
+            current_rto = self.est.current_rto()
+
+            deadline = time.monotonic() + current_rto
 
             while True:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
+                    self.tracker.on_timeout(pkt.seq)
                     break  # resend
 
                 try:
-                    self.sock.settimeout(remaining)
+                    self.sock.settimeout(min(remaining, 0.005))
+                    self.channel.pump()
+
                     data, _addr = self.sock.recvfrom(2048)
                 except socket.timeout:
+                    if time.monotonic() < deadline:
+                        continue
+                    self.tracker.on_timeout(pkt.seq)
                     break  # resend
                 except ConnectionResetError:
                     # Windows WinError 10054: nothing listening on the peer port.
@@ -83,6 +98,7 @@ class StopAndWait(ARQProtocol):
                 if reply is None:
                     continue  # corrupt or truncated: ignore
                 if (reply.flags & ACK) and reply.ack == pkt.seq:
+                    self.tracker.on_ack(pkt.seq, time.monotonic())
                     return
                 # stale or duplicate ACK: ignore, deadline unchanged
 
@@ -117,12 +133,29 @@ class StopAndWait(ARQProtocol):
 
     def _recv_packet(self, timeout):
         """Return a valid Packet, None for junk/reset, raise socket.timeout."""
-        self.sock.settimeout(timeout)
-        try:
-            data, _addr = self.sock.recvfrom(2048)
-        except ConnectionResetError:
-            return None  # Windows: an earlier send hit a closed port; ignore
-        return Packet.unpack(data)  # None if corrupt
+        deadline = time.monotonic() + timeout
+
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise socket.timeout()
+
+            try:
+                self.sock.settimeout(min(remaining, 0.005))
+                self.channel.pump()          # deliver any delayed ACKs now due
+
+                data, _addr = self.sock.recvfrom(2048)
+
+            except socket.timeout:
+                if time.monotonic() < deadline:
+                    continue                 # short poll expired, keep waiting
+                raise                        # the real deadline passed
+
+            except ConnectionResetError:
+                return None                  # Windows: peer port was closed
+
+            return Packet.unpack(data)       # None if corrupt
+        
 
     def receive_file(self, path):
         self._reset_stats()
