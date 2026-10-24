@@ -81,3 +81,12 @@ def test_reset_option_clears_backoff_after_retx_ack():
     t.on_ack(2, 1.1)                     # ambiguous: no sample
     assert close(est.srtt, 0.1)          # estimator untouched
     assert close(est.current_rto(), 0.3) # but backoff cleared
+
+
+def test_discard_forgets_without_sampling():
+    est, t = make()
+    t.on_send(1, 0.0)       
+    t.discard(1)
+    t.on_ack(1, 0.5)                     # nothing to measure any more
+    assert est.srtt is None
+    assert 1 not in t.sent_at and 1 not in t.retransmitted
