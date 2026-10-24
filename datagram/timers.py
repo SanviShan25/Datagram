@@ -2,8 +2,9 @@ from datagram.rto import RTOEstimator
 
 
 class RTTTracker:
-    def __init__(self, estimator):
+    def __init__(self, estimator, reset_on_retx_ack=False):
         self.est = estimator
+        self.reset_on_retx_ack = reset_on_retx_ack   # deviation from textbook Karn
         self.sent_at = {}            # seq -> time it was last sent
         self.retransmitted = set()   # seqs that were resent at least once
 
@@ -11,10 +12,14 @@ class RTTTracker:
         # called for the first send AND for every resend
         self.sent_at[seq] = now
 
-    def on_timeout(self, seq):
-        # timer fired: this packet is now ambiguous, and back off
+    def on_timeout(self, seq, backoff=True):
+        # timer fired: this packet is now ambiguous(Karn's rule), and back off
         self.retransmitted.add(seq)
-        self.est.on_timeout()
+
+        # SR can expire several packets at once; the caller backs off
+        # only once per sweep by passing backoff=False for the rest
+        if backoff:
+            self.est.on_timeout()
 
     def on_ack(self, seq, now):
         # a duplicate or unknown ACK has nothing to measure
@@ -26,7 +31,18 @@ class RTTTracker:
         # Karn's rule: a retransmitted packet's ACK is ambiguous (original or
         # resend?), so its RTT must never reach the estimator
         if seq not in self.retransmitted:        # B
-            self.est.on_rtt_sample(r)
-
+            self.est.on_rtt_sample(r)            # clean packet: measure as usual
+        elif self.reset_on_retx_ack:
+            # Still no sample (ambiguous), but clear the backoff so one bad
+            # patch doesn't leave the RTO stuck at the cap
+            self.est.reset_backoff()
         del self.sent_at[seq]                    # C: forget this packet
         self.retransmitted.discard(seq)
+
+    def test_timeout_without_backoff_marks_but_keeps_rto():
+        est, t = make()
+        t.on_send(1, 0.0)
+        est.on_rtt_sample(0.1)            # rto 0.3
+        t.on_timeout(1, backoff=False)
+        assert 1 in t.retransmitted
+        assert close(est.current_rto(), 0.3)

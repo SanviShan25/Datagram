@@ -58,3 +58,26 @@ def test_state_cleared_after_ack():
     t.on_ack(1, 0.5)
     assert 1 not in t.sent_at
     assert 1 not in t.retransmitted
+
+
+def test_timeout_without_backoff_marks_but_keeps_rto():
+    est, t = make()
+    t.on_send(1, 0.0)
+    est.on_rtt_sample(0.1)            # rto 0.3
+    t.on_timeout(1, backoff=False)
+    assert 1 in t.retransmitted
+    assert close(est.current_rto(), 0.3)
+
+
+def test_reset_option_clears_backoff_after_retx_ack():
+    est = RTOEstimator(min_rto=0.0, max_rto=10.0)
+    t = RTTTracker(est, reset_on_retx_ack=True)
+    t.on_send(1, 0.0)
+    t.on_ack(1, 0.1)                     # srtt 0.1, rto 0.3
+    t.on_send(2, 0.2)
+    t.on_timeout(2)
+    t.on_timeout(2)                      # rto 0.3 -> 0.6 -> 1.2
+    t.on_send(2, 1.0)
+    t.on_ack(2, 1.1)                     # ambiguous: no sample
+    assert close(est.srtt, 0.1)          # estimator untouched
+    assert close(est.current_rto(), 0.3) # but backoff cleared
