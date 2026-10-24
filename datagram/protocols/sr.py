@@ -119,12 +119,12 @@ class SelectiveRepeat(ARQProtocol):
     """Runs SRSender / SRReceiver over a real socket and a Channel."""
  
     def __init__(self, sock, channel, window=8, rto=0.5, est=None,
-                 max_retries=60, idle_timeout=5.0, linger=None):
+                 max_retries=60, idle_timeout=5.0, linger=None, reset_on_retx_ack=False):
         self.sock = sock
         self.channel = channel                  # anything with .send(bytes) and .pump()
         self.window = window
         self.est = est or RTOEstimator()        # est=RTOEstimator(fixed=x) -> fixed baseline
-        self.tracker = RTTTracker(self.est)
+        self.tracker = RTTTracker(self.est, reset_on_retx_ack=reset_on_retx_ack)
         self.max_retries = max_retries          # total transmissions per packet
         self.idle_timeout = idle_timeout        # receiver: max silence before giving up
         # After the FIN is delivered, keep re-ACKing until this much silence
