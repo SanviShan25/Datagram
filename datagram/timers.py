@@ -21,6 +21,13 @@ class RTTTracker:
         if backoff:
             self.est.on_timeout()
 
+    def discard(self, seq):
+           # A cumulative ACK covered this packet, but its own ACK was never seen,
+           # so a sample taken now would include the wait for a later ACK.
+           # Forget it without measuring.
+           self.sent_at.pop(seq, None)
+           self.retransmitted.discard(seq)
+
     def on_ack(self, seq, now):
         # a duplicate or unknown ACK has nothing to measure
         if seq not in self.sent_at:
