@@ -98,3 +98,18 @@ def test_fixed_mode_never_changes():
     est.on_rtt_sample(0.500)
     est.on_timeout()
     assert close(est.current_rto(), 0.2)
+
+def test_reset_backoff_returns_to_formula_value():
+    est = make()
+    est.on_rtt_sample(0.1)               # rto 0.3
+    est.on_timeout()
+    est.on_timeout()                     # 1.2
+    est.reset_backoff()
+    assert close(est.current_rto(), 0.3)
+
+
+def test_reset_backoff_before_any_sample_changes_nothing():
+    est = RTOEstimator(initial_rto=0.5, min_rto=0.0, max_rto=10.0)
+    est.on_timeout()                     # 1.0
+    est.reset_backoff()
+    assert close(est.current_rto(), 1.0)

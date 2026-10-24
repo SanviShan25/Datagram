@@ -36,6 +36,13 @@ class RTOEstimator:
 
         self.rto = self._clamp(self.srtt + self.K * self.rttvar)
 
+    def reset_backoff(self):
+        # Return to the formula value after a backoff streak, without
+        # taking a new sample. Nothing to reset to before the first sample.
+        if self.fixed is not None or self.srtt is None:
+            return
+        self.rto = self._clamp(self.srtt + self.K * self.rttvar)
+
     def on_timeout(self):
         # Exponential backoff: if packets keep vanishing, retry more slowly
         if self.fixed is not None:
