@@ -45,14 +45,32 @@ class GoBackN(ARQProtocol):
         self.channel.send(Packet(seq=0, ack=ack_number, flags=ACK).pack())
         self.stats["packets_sent"] += 1
 
+
     def _recv_packet(self, timeout):
-        """Return a valid Packet, None for junk, raise socket.timeout."""
-        self.sock.settimeout(timeout)
-        try:
-            data, _addr = self.sock.recvfrom(2048)
-        except ConnectionResetError:      # Windows: peer port was closed
-            return None
-        return Packet.unpack(data)        # None if corrupt
+        """Return a valid Packet, None for junk/reset, raise socket.timeout."""
+        deadline = time.monotonic() + timeout
+
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise socket.timeout()
+
+            try:
+                self.sock.settimeout(min(remaining, 0.005))
+                if hasattr(self.channel, "pump"):
+                    self.channel.pump()           # deliver any delayed ACKs now due
+
+                data, _addr = self.sock.recvfrom(2048)
+
+            except socket.timeout:
+                if time.monotonic() < deadline:
+                    continue                 # short poll expired, keep waiting
+                raise                        # the real deadline passed
+
+            except ConnectionResetError:
+                return None                  # Windows: peer port was closed
+
+            return Packet.unpack(data)       # None if corrupt
 
     # -------------------------------------------------------------- sender
     def send_file(self, path):

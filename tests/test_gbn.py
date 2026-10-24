@@ -22,6 +22,7 @@ from datagram.channel import Channel
 from datagram.packet import Packet, DATA, ACK, FIN
 from datagram.protocols.gbn import GoBackN
 from datagram.protocols.stop_wait import StopAndWait
+from datagram.rto import RTOEstimator
 
 RTO = 0.05
 
@@ -52,19 +53,19 @@ class ScriptedChannel:
 
 
 def transfer(tmp_path, size, protocol=GoBackN, window=8, loss=0.0, corrupt=0.0,
-             seed=42, rto=RTO, max_retries=60, ack_drop=()):
+             seed=42, rto=RTO, max_retries=60, ack_drop=(), delay =0.0):
     src, dst = tmp_path / "src.bin", tmp_path / "dst.bin"
     src.write_bytes(os.urandom(size))
     s_sock, r_sock = make_socket(), make_socket()
     out, err = {}, []
     try:
         s_addr, r_addr = s_sock.getsockname(), r_sock.getsockname()
-        s_chan = Channel(s_sock, r_addr, seed=seed, loss=loss, corrupt=corrupt)
+        s_chan = Channel(s_sock, r_addr, seed=seed, loss=loss, corrupt=corrupt, delay=delay)
         if ack_drop:
             r_chan = ScriptedChannel(r_sock, s_addr, drop=ack_drop)
         else:
-            r_chan = Channel(r_sock, s_addr, seed=seed + 1, loss=loss, corrupt=corrupt)
-        kw = {"window": window} if protocol is GoBackN else {}
+            r_chan = Channel(r_sock, s_addr, seed=seed + 1, loss=loss, corrupt=corrupt, delay=delay)
+        kw = {"window": window} if protocol is GoBackN else {"est": RTOEstimator(fixed=rto)}
         sender = protocol(s_sock, s_chan, rto=rto, max_retries=max_retries, **kw)
         receiver = protocol(r_sock, r_chan, rto=rto, max_retries=max_retries,
                             idle_timeout=5.0, linger=0.3, **kw)
@@ -246,3 +247,9 @@ def test_receiver_does_not_write_duplicates(tmp_path):
     p.send(1, flags=FIN);    assert p.ack() == 1
     p.finish()
     assert p.path.read_bytes() == b"a"
+
+
+@pytest.mark.parametrize("delay", [0.01, 0.02])
+def test_delay_alone_needs_no_retransmissions(tmp_path, delay):
+ tx, _ = transfer(tmp_path, 20000, window=8, rto=0.3, delay=delay)
+ assert tx["retransmissions"] == 0
