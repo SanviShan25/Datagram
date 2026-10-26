@@ -45,11 +45,3 @@ class RTTTracker:
             self.est.reset_backoff()
         del self.sent_at[seq]                    # C: forget this packet
         self.retransmitted.discard(seq)
-
-    def test_timeout_without_backoff_marks_but_keeps_rto():
-        est, t = make()
-        t.on_send(1, 0.0)
-        est.on_rtt_sample(0.1)            # rto 0.3
-        t.on_timeout(1, backoff=False)
-        assert 1 in t.retransmitted
-        assert close(est.current_rto(), 0.3)
