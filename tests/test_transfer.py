@@ -1,4 +1,3 @@
-# tests/test_transfer.py
 import hashlib
 import socket
 import threading
@@ -6,24 +5,29 @@ import threading
 import pytest
 
 from datagram.channel import Channel
+from datagram.rto import RTOEstimator
 from datagram.protocols.gbn import GoBackN
-from datagram.protocols.sr import SelectiveRepeat      # TODO: class name check karo
-from datagram.protocols.stop_wait import StopAndWait   # TODO: class name check karo
+from datagram.protocols.sr import SelectiveRepeat
+from datagram.protocols.stop_wait import StopAndWait
 
-# TODO: har protocol ke __init__ ke asli keyword arguments yahan likho.
-# Chhota rto + linger tests ko tez rakhta hai.
+RTO = 0.05          
+LINGER = 0.3
+RETRIES = 60        
 FACTORIES = {
-    "stop_and_wait": lambda s, ch: StopAndWait(s, ch, rto=0.1, linger=0.3),
-    "go_back_n": lambda s, ch: GoBackN(s, ch, window=8, rto=0.1, linger=0.3),
-    "selective_repeat": lambda s, ch: SelectiveRepeat(s, ch, window=8, rto=0.1, linger=0.3),
+    "stop_and_wait": lambda s, ch: StopAndWait(
+        s, ch, rto=RTO, max_retries=RETRIES, linger=LINGER,
+        est=RTOEstimator(fixed=RTO)),
+    "go_back_n": lambda s, ch: GoBackN(
+        s, ch, window=8, rto=RTO, max_retries=RETRIES, linger=LINGER),
+    "selective_repeat": lambda s, ch: SelectiveRepeat(
+        s, ch, window=8, rto=RTO, max_retries=RETRIES, linger=LINGER,
+        est=RTOEstimator(fixed=RTO)),
 }
 
-# Abhi sirf loss/dup/corrupt. delay/reorder tab add karo jab protocols
-# channel.pump() call karne lage (warna delayed packets atak jaate hain).
 CONDITIONS = {
     "clean": {},
     "loss20": {"loss": 0.2},
-    "loss_dup_corrupt": {"loss": 0.2, "dup": 0.1, "corrupt": 0.1},  # sir ka T10 case
+    "loss_dup_corrupt": {"loss": 0.2, "dup": 0.1, "corrupt": 0.1},  # T10 ka case
 }
 
 
@@ -48,13 +52,13 @@ def transfer(tmp_path, make, data, seed, **chan):
         def rx():
             try:
                 receiver.receive_file(str(dst))
-            except Exception as e:          # thread ki error test tak pahunchao
+            except Exception as e:
                 errors.append(e)
 
         t = threading.Thread(target=rx)
         t.start()
         sender.send_file(str(src))
-        t.join(timeout=60)
+        t.join(timeout=30)
         assert not t.is_alive(), "receiver did not finish"
         assert not errors, f"receiver failed: {errors[0]!r}"
     finally:
