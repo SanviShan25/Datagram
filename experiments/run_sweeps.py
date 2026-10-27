@@ -54,7 +54,7 @@ def exp3_retx_vs_reorder(protocols):
             for p in protocols for r in (0.0, 0.05, 0.1, 0.2, 0.3)]
 
 
-def exp4_rto_variants(_protocols):
+def exp4_rto_variants(_protocols): # unused: this experiment always runs on sr
     # reset_on_retx_ack only exists in Selective Repeat -> all variants run on sr
     # Case: adaptive          -> default estimator
     # Case: adaptive + reset  -> same, but backoff resets on a retx ACK
@@ -72,8 +72,8 @@ EXPERIMENTS = {"exp1": ("exp1_goodput_vs_loss", exp1_goodput_vs_loss),
                "exp4": ("exp4_rto_variants", exp4_rto_variants)}
 
 if __name__ == "__main__":
-    which = "exp1"       # "exp1", "exp2", "exp3", "exp4" or "all"
-    quick = True         # True = tiny test run, False = the real full run
+    which = "all"       # "exp1", "exp2", "exp3", "exp4" or "all"
+    quick = False         # True = tiny test run, False = the real full run
     protocols = ["sw", "gbn", "sr"]
 
     seeds, size = ([1], 20_000) if quick else (SEEDS, FILE_SIZE)
