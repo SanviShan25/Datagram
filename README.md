@@ -21,6 +21,7 @@ An adaptive retransmission-timeout (RTO) estimator (Jacobson/Karels, with Karn's
 - Uniform stats from every protocol: packets_sent, retransmissions, bytes_delivered, elapsed_s.
 - Adaptive RTO (Jacobson/Karels) with Karn’s rule and an optional backoff reset.
 - Selective Repeat ARQ with per-packet ACKs and timers and a receiver out-of-order buffer.
+- Experiment harness, sweep runner and plotting scripts (`experiments/`) that reproduce all results in `results/`.
 
 ## Project Structure
 
@@ -41,6 +42,12 @@ Datagram/
 │   ├── test_sr_loopback.py     # Selective Repeat end-to-end transfers with hash check, seed sweep
 │   └── test_transfer.py        # End-to-end transfers: 3 protocols x 4 channel conditions x 2 seeds x 6 sizes
 │
+├── experiments/
+│   ├── harness.py        # run_trial(): runs one transfer, returns one CSV row
+│   ├── run_sweeps.py     # The four experiments (loss, window, reorder, RTO)
+│   └── plots.py          # Plots, RTO table, claim check, SHA-256 integrity check
+│
+├── results/              # CSVs and PNG plots produced by the experiments
 └── datagram/
     ├── __init__.py   # Empty Python package marker
     ├── channel.py    # Channel emulator
@@ -62,8 +69,9 @@ This structure reflects the project files present when this README was updated. 
 - Python 3. The repository does not declare a minimum or tested Python version.
 - Git, if cloning the repository.
 - pytest, only to run the tests.
+- matplotlib and pandas, only to run the experiments and plots (listed in requirements.txt).
 
-The source imports no third-party packages.
+The protocol code in `datagram/` imports no third-party packages. Only the experiments use matplotlib and pandas.
 
 ## Installation
 
@@ -74,11 +82,12 @@ git clone https://github.com/SanviShan25/Datagram.git
 cd Datagram
 ```
 
-No package installation step is defined by the repository.
+Install the dependencies below. matplotlib and pandas are needed only for the experiments and plots, and pytest only for the tests.
 
 To run the tests, install pytest:
 
 ```bash
+pip install -r requirements.txt
 pip install pytest
 ```
 
@@ -295,10 +304,61 @@ Limitations: corruption flips exactly one bit, which CRC-32 always detects, so u
 - Stats counting rule. packets_sent counts every transmission (on the receiver, every ACK sent). Sender retransmissions is one per resent packet. Receiver retransmissions counts duplicates (seq < expected) and repeated FINs.
 - Linger, idle timeout and Windows handling work as in Stop-and-Wait. elapsed_s is measured before lingering.
 
-### Known Limitations
+## Experiments (`experiments/`)
+
+The experiments test the claim from the proposal: *Selective Repeat achieves higher goodput than Go-Back-N under moderate to high loss (>5%), while both outperform Stop-and-Wait at any non-trivial window size.*
+
+| File | Role |
+|---|---|
+| `experiments/harness.py` | `run_trial()` runs one transfer (protocol, seed, loss, window, reorder, file size, RTO), checks the SHA-256 hash, and returns one CSV row. `write_csv()` saves rows. |
+| `experiments/run_sweeps.py` | Defines the four experiments and runs every configuration for each seed. A failed trial is recorded (`completed=False` plus the error) instead of stopping the sweep. |
+| `experiments/plots.py` | Reads the CSVs and produces the plots, the RTO table, a check of the claim and a SHA-256 integrity check. |
+| `results/` | Output CSVs and PNG plots. |
+
+### Setup
+
+All experiments use a 50,000-byte file (about 49 packets), 5 seeds per configuration (averaged), 10 ms one-way delay and one fixed RTO of 0.1 s shared by all protocols (except Experiment 4). Goodput is `bytes_delivered * 8 / elapsed_s`, in bits per second. The plots show it in kbit/s and the findings below use Mbit/s.
+
+| Experiment | What varies | Held constant | Output |
+|---|---|---|---|
+| exp1 | Loss 0-30% | Window 8 | `exp1_goodput_vs_loss` |
+| exp2 | Window 1, 2, 4, 8, 16, 32 | Loss 10%; Stop-and-Wait runs once as a flat baseline | `exp2_goodput_vs_window` |
+| exp3 | Reordering 0-30% | Loss 5%, window 8 | `exp3_retx_vs_reorder` |
+| exp4 | RTO variant (adaptive, adaptive + reset, fixed 0.05 / 0.1 / 0.3 s) at 0-30% loss | Selective Repeat, window 8 | `exp4_rto_variants`, `exp4_rto_goodput_table` |
+
+### How to run
+
+From the repository root. Edit `which` (`"exp1"` to `"exp4"` or `"all"`) and `quick` (`True` for a tiny test run) at the bottom of `run_sweeps.py` first:
+
+```bash
+python -m experiments.run_sweeps   # writes results/<experiment>.csv
+python -m experiments.plots        # writes results/*.png, prints claim check and SHA-256 check
+python -m experiments.harness      # optional: quick smoke test, writes results/smoke.csv
+```
+
+Run the sweeps before the plots, because `plots.py` reads the CSVs.
+
+### Results
+
+![Goodput vs loss rate](results/exp1_goodput_vs_loss.png)
+![Goodput vs window size](results/exp2_goodput_vs_window.png)
+![Retransmissions vs reordering](results/exp3_retx_vs_reorder.png)
+
+Findings (mean of 5 seeds):
+
+- **Windowed protocols beat Stop-and-Wait.** At 0% loss, Go-Back-N and Selective Repeat reach about 1.7 Mbit/s versus about 0.25 Mbit/s for Stop-and-Wait.
+- **Selective Repeat leads from 10% loss upward.** At 5% loss with window 8, Go-Back-N is slightly ahead (about 0.87 vs 0.81 Mbit/s). At 10% loss Selective Repeat is ahead (about 0.45 vs 0.42 Mbit/s), and the gap grows with loss.
+- **Selective Repeat wins at larger windows.** At 10% loss, Go-Back-N is slightly ahead at windows 2 and 4 (about 0.26 vs 0.20 and 0.34 vs 0.30 Mbit/s); Selective Repeat overtakes it from window 8 upward. The gap then grows with window size.
+- **The gap grows with window size.** At 10% loss with window 32, Selective Repeat reaches about 1.19 Mbit/s versus about 0.59 Mbit/s for Go-Back-N. Go-Back-N's retransmissions rise with window size (47 at window 8, 106 at window 32), while Selective Repeat's stay at 12.
+- **Reordering hurts Go-Back-N most.** At 30% reordering, Go-Back-N makes about 117 retransmissions versus about 9 for Selective Repeat.
+- **RTO sensitivity.** The comparison table is in `results/exp4_rto_goodput_table.csv`. Backoff-reset recovers much of the gap to fixed timeouts at high loss.
+
+Every completed transfer is verified by SHA-256 hash, and `plots.py` reports any mismatch or failed trial.
+
+## Known Limitations
 
 - Go-Back-N uses a fixed timeout; it does not use the RTO estimator yet.
-- The experiment runner is not complete yet.
+- Experiments run on loopback with an emulated channel, so they compare relative goodput between protocols, not absolute network performance.
 
 ## Contributors
 
@@ -313,7 +373,6 @@ Git commit history identifies these contributors:
 
 - Document the supported Python version and add project/dependency metadata.
 - Adaptive RTO inside Go-Back-N.
-- Experiments: goodput versus loss rate, goodput versus window size, retransmissions versus reordering probability, sensitivity to RTO tuning.
 - Stretch goals: SACK blocks, sliding-window flow control, connection setup and teardown, Nagle-style coalescing.
 
 ## License
