@@ -209,8 +209,6 @@ receiver = SelectiveRepeat(
 
 ## Packet Format and ACK Semantics
 
-*Status: proposed on 2026-10-12, pending confirmation from all four members. Remove this line once everyone has agreed.*
-
 All three ARQ protocols (Stop-and-Wait, Go-Back-N, Selective Repeat) share one packet format and one set of conventions. The format is implemented in `datagram/packet.py`.
 
 ### Header (15 bytes, network byte order)
@@ -221,7 +219,7 @@ All three ARQ protocols (Stop-and-Wait, Go-Back-N, Selective Repeat) share one p
 | `ack` | uint32 | Which packet is being acknowledged |
 | `flags` | uint8 | bit0 = `DATA`, bit1 = `ACK`, bit2 = `FIN` |
 | `payload_len` | uint16 | Number of data bytes after the header |
-| `checksum` | uint32 | CRC32 over the header (checksum field zeroed) and the payload |
+| `checksum` | uint32 | CRC-32 (handwritten, `crc32()` in `packet.py`) over the header (checksum field zeroed) and the payload |
 
 ### Conventions
 
@@ -234,6 +232,33 @@ All three ARQ protocols (Stop-and-Wait, Go-Back-N, Selective Repeat) share one p
 5. **Sending** goes through `channel.send(raw_bytes)`, including ACKs, because ACKs can be lost too. Receiving uses `sock.recvfrom(2048)`.
 6. **Corrupt packets:** `Packet.unpack` returns `None` for a corrupt, truncated or padded packet. Receivers and senders ignore these.
 7. **Stats:** every protocol's `send_file` and `receive_file` returns a dict with the keys `packets_sent`, `retransmissions`, `bytes_delivered` and `elapsed_s`. The experiment harness reads these by name.
+
+### Handwritten CRC-32
+
+The checksum is computed by our own `crc32()` in `datagram/packet.py` (IEEE 802.3 polynomial, reflected form `0xEDB88320`, table-driven with a 256-entry table built at import time). No `zlib` or other checksum library is used by the protocol code. `zlib.crc32` appears only in `tests/test_packet.py`, as a reference answer to check ours against. `pack()` builds the header with the checksum set to 0, computes the CRC over header plus payload, then writes the real value in. `unpack()` repeats the same computation and returns `None` on a mismatch.
+
+## Channel Emulator (`datagram/channel.py`)
+
+The `Channel` class sits between a protocol and the real UDP socket. A protocol calls `channel.send(raw_bytes)` instead of `sock.sendto(...)`, and the channel decides what happens to the packet.
+
+| Parameter | Meaning |
+|---|---|
+| `loss` | Probability that a packet is dropped |
+| `corrupt` | Probability that one bit is flipped (in the payload when there is one, so the checksum is what catches it) |
+| `dup` | Probability that a packet is delivered twice |
+| `reorder`, `reorder_delay` | Probability that a packet is held back by `reorder_delay` seconds, so later packets overtake it |
+| `delay`, `jitter` | Base one-way delay and its random variation (+/- jitter seconds) |
+| `seed` | Seed for the channel's own `random.Random`, so every run is reproducible |
+| `clock` | Time source, injectable so tests can use a fake clock |
+
+Design notes:
+- **Reproducibility.** The channel uses its own seeded `random.Random`, never the global `random` module. For every packet it draws the same fixed set of random numbers in the same order, even if the packet is dropped. Changing one setting (for example `loss`) therefore does not change the random numbers used by the others, so experiments that vary one parameter stay comparable.
+- **Delay queue.** `send()` does not sleep. It pushes each packet onto a min-heap keyed by delivery time, and `pump()` delivers every packet whose time has come. Reordering falls out of delay: a packet with a larger delay arrives after later packets. Each duplicate gets its own jitter, so a copy can overtake or trail the original.
+- **`pump()`.** With `delay=0` and `reorder=0`, packets are delivered immediately inside `send()`. When delay is used, the protocol loops must call `channel.pump()` regularly, otherwise delayed packets are never delivered.
+- **Stats.** `channel.stats` counts `sent`, `dropped`, `corrupted`, `duplicated` and `delivered`.
+- **Tests.** `tests/test_channel.py` and `tests/test_channel_v2.py` check loss rate, reproducibility, single-bit corruption, delay, jitter bounds and reordering using a fake clock. `tests/test_transfer.py` runs complete file transfers for all three protocols over several channel conditions and compares SHA-256 hashes (108 cases).
+
+Limitations: corruption flips exactly one bit, which CRC-32 always detects, so undetected corruption is not modelled. In tests, the two directions use different seeds.
 
 Stop-and-Wait Design Notes: 
 -One timer deadline per attempt. The deadline is computed once when a packet is sent, and each recvfrom only gets the time remaining. Stale ACKs and junk packets therefore cannot postpone a retransmission.
