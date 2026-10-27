@@ -12,10 +12,12 @@ from datagram.protocols.stop_wait import StopAndWait
 from datagram.protocols.sr import SelectiveRepeat
 from datagram.rto import RTOEstimator
 
-# Column order of the CSV. 
+# Column order of the CSV. "completed" and "error" are new: a trial that
+# fails is recorded (completed=False + the error text) instead of crashing
+# the whole sweep.
 FIELDS = ["protocol", "seed", "loss", "window", "reorder", "delay", "file_size",
           "rto", "reset_backoff", "elapsed_s", "goodput_bps", "packets_sent",
-          "retransmissions", "hash_ok"]
+          "retransmissions", "hash_ok", "completed", "error"]
 
 
 # ====================================================================
@@ -101,8 +103,20 @@ def run_trial(protocol, seed, loss, window, reorder, file_size,
 
             t = threading.Thread(target=recv, daemon=True)
             t.start()
-            s = sender.send_file(src)            # sender runs in the main thread
-            t.join(timeout=join_timeout)
+
+            # If the sender fails, still look at what the receiver says, so the
+            # error message shows BOTH sides (did the receiver die? did packets
+            # stop arriving?).
+            send_err = None
+            try:
+                s = sender.send_file(src)        # sender runs in the main thread
+            except Exception as e:
+                send_err = e
+            t.join(timeout=join_timeout if send_err is None else 8)
+            if send_err is not None:
+                raise RuntimeError(
+                    f"sender: {send_err!r} | receiver: {result.get('error')!r} | "
+                    f"s_chan={s_chan.stats} r_chan={r_chan.stats}") from send_err
 
             assert not t.is_alive(), "receiver hung"
             assert "error" not in result, f"receiver failed: {result.get('error')}"
@@ -129,13 +143,15 @@ def run_trial(protocol, seed, loss, window, reorder, file_size,
         "packets_sent": s["packets_sent"],
         "retransmissions": s["retransmissions"],
         "hash_ok": hash_ok,
+        "completed": True,
+        "error": "",
     }
 
 
 def write_csv(rows, path):
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=FIELDS)
+        w = csv.DictWriter(f, fieldnames=FIELDS, restval="")   # failed rows leave blanks
         w.writeheader()
         w.writerows(rows)
 

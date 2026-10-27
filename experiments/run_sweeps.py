@@ -16,17 +16,32 @@ LOSS_WINDOW = 0.10          # loss held constant in the window sweep (the claim 
 
 
 def sweep(name, configs, seeds, file_size):
-    # Always write what finished, even if a run crashes half way
+    # Always write what finished, even if a run crashes half way.
+    # A trial that fails is recorded (completed=False + error text) and the
+    # sweep goes on with the next one, so one bad trial can't kill the run.
     rows, total, t0 = [], len(configs) * len(seeds), time.time()
+    failed = 0
     try:
         for cfg in configs:
             for seed in seeds:
-                rows.append(run_trial(seed=seed, file_size=file_size, delay=DELAY, **cfg))
+                try:
+                    rows.append(run_trial(seed=seed, file_size=file_size, delay=DELAY, **cfg))
+                except Exception as e:
+                    failed += 1
+                    print(f"[{name}] FAILED {cfg} seed={seed}: {e}", flush=True)
+                    rows.append({
+                        "protocol": cfg["protocol"], "seed": seed, "loss": cfg["loss"],
+                        "window": cfg["window"], "reorder": cfg["reorder"],
+                        "delay": DELAY, "file_size": file_size,
+                        "rto": "adaptive" if cfg.get("adaptive") else cfg["rto"],
+                        "reset_backoff": cfg.get("reset", False),
+                        "completed": False, "error": str(e)[:300],
+                    })
                 print(f"[{name}] {len(rows)}/{total}  {time.time() - t0:.0f}s  {cfg}", flush=True)
     finally:
         if rows:
             write_csv(rows, f"results/{name}.csv")
-            print(f"wrote results/{name}.csv ({len(rows)} rows)")
+            print(f"wrote results/{name}.csv ({len(rows)} rows, {failed} failed)")
 
 
 # ====================================================================
@@ -72,7 +87,7 @@ EXPERIMENTS = {"exp1": ("exp1_goodput_vs_loss", exp1_goodput_vs_loss),
                "exp4": ("exp4_rto_variants", exp4_rto_variants)}
 
 if __name__ == "__main__":
-    which = "all"       # "exp1", "exp2", "exp3", "exp4" or "all"
+    which = "all"      # "exp1", "exp2", "exp3", "exp4" or "all"
     quick = False         # True = tiny test run, False = the real full run
     protocols = ["sw", "gbn", "sr"]
 

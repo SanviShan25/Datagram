@@ -13,6 +13,18 @@ NAMES = {"sw": "Stop-and-Wait", "gbn": "Go-Back-N", "sr": "Selective Repeat"}
 COLORS = {"sw": "red", "gbn": "blue", "sr": "green"}
 
 
+def load(name):
+    # Read one results CSV. Trials that failed (completed=False) are left out
+    # of the averages, but the number is printed so it can go in the report.
+    df = pd.read_csv(f"results/{name}.csv")
+    if "completed" in df.columns:
+        ok = df["completed"].astype(bool)
+        if (~ok).sum():
+            print(f"{name}: {int((~ok).sum())} failed trial(s) excluded from the averages")
+        df = df[ok]
+    return df
+
+
 def settings_note(df):
     # What was held constant, read from the CSV itself so it is always correct
     # (the proposal says file size and RTT stay constant)
@@ -25,7 +37,7 @@ def settings_note(df):
 # Graph 1: goodput vs loss
 # ====================================================================
 def plot_goodput_vs_loss():
-    df = pd.read_csv("results/exp1_goodput_vs_loss.csv")     # the whole CSV as a table
+    df = load("exp1_goodput_vs_loss")                        # the whole CSV as a table
 
     # 5 seeds per setting -> one average per (protocol, loss)
     avg = df.groupby(["protocol", "loss"])["goodput_bps"].mean().reset_index()
@@ -49,7 +61,7 @@ def plot_goodput_vs_loss():
 # Graph 2: goodput vs window size
 # ====================================================================
 def plot_goodput_vs_window():
-    df = pd.read_csv("results/exp2_goodput_vs_window.csv")
+    df = load("exp2_goodput_vs_window")
     avg = df.groupby(["protocol", "window"])["goodput_bps"].mean().reset_index()
 
     for p in ["gbn", "sr"]:                                  # sw has no window to sweep
@@ -78,7 +90,7 @@ def plot_goodput_vs_window():
 # Graph 3: retransmissions vs reordering
 # ====================================================================
 def plot_retx_vs_reorder():
-    df = pd.read_csv("results/exp3_retx_vs_reorder.csv")
+    df = load("exp3_retx_vs_reorder")
     avg = df.groupby(["protocol", "reorder"])["retransmissions"].mean().reset_index()
 
     for p in ["sw", "gbn", "sr"]:
@@ -103,9 +115,6 @@ def rto_table():
     df = pd.read_csv("results/exp4_rto_variants.csv")
 
     # Give every row a readable name for its RTO variant
-    # Case: rto is "adaptive" + reset on -> "Adaptive + reset"
-    # Case: rto is "adaptive"            -> "Adaptive"
-    # Case: rto is a number              -> "Fixed <that many> s"
     names = []
     for rto, reset in zip(df["rto"], df["reset_backoff"]):
         if rto == "adaptive" and reset:
@@ -116,16 +125,23 @@ def rto_table():
             names.append(f"Fixed {rto} s")
     df["variant"] = names
 
-    # Rows = variant, columns = loss level, cells = average goodput in kbit/s
-    table = df.pivot_table(index="variant", columns="loss", values="goodput_bps",
-                           aggfunc="mean") / 1000
-    table.columns = [f"{round(l * 100)}% loss" for l in table.columns]
-    table = table.round(1)
+    # Mean goodput over the runs that finished (failed runs have no goodput)
+    done_rows = df[df["completed"] == True]
+    mean = done_rows.pivot_table(index="variant", columns="loss",
+                                 values="goodput_bps", aggfunc="mean") / 1000
 
-    print("\nGoodput (kbit/s) by RTO variant (Selective Repeat, mean over seeds)")
+    # How many runs finished, out of how many were tried
+    finished = df.pivot_table(index="variant", columns="loss",
+                              values="completed", aggfunc="sum").astype(int)
+    total = df.groupby(["variant", "loss"]).size().unstack()
+
+    table = (mean.round(1).astype(str) + " ("
+             + finished.astype(str) + "/" + total.astype(str) + ")")
+    table.columns = [f"{round(l * 100)}% loss" for l in table.columns]
+
+    print("\nGoodput kbit/s (finished runs / total runs), Selective Repeat")
     print(table)
     table.to_csv("results/exp4_rto_goodput_table.csv")
-
 
 # ====================================================================
 # Does the data support the proposal's claim? (prints numbers only)
@@ -133,7 +149,7 @@ def rto_table():
 def claim_check():
     # Claim: SR beats GBN when loss > 5%, and both beat Stop-and-Wait.
     # Say in the report what the numbers show, even if the claim holds only partly.
-    df = pd.read_csv("results/exp1_goodput_vs_loss.csv")
+    df = load("exp1_goodput_vs_loss")
     table = df.pivot_table(index="loss", columns="protocol", values="goodput_bps",
                            aggfunc="mean") / 1000
     print("\nMean goodput (kbit/s) per loss level")
@@ -147,7 +163,7 @@ def claim_check():
         print(f"{NAMES[p]} beats Stop-and-Wait at {wins} of {len(table)} loss levels")
 
     # Second half of the claim: both beat Stop-and-Wait at every window size above 1
-    df2 = pd.read_csv("results/exp2_goodput_vs_window.csv")
+    df2 = load("exp2_goodput_vs_window")
     sw = df2[df2["protocol"] == "sw"]["goodput_bps"].mean()          # one flat baseline
     by_window = df2.pivot_table(index="window", columns="protocol", values="goodput_bps",
                                 aggfunc="mean")
@@ -163,10 +179,17 @@ def claim_check():
 def integrity_check():
     for name in ["exp1_goodput_vs_loss", "exp2_goodput_vs_window",
                  "exp3_retx_vs_reorder", "exp4_rto_variants"]:
-        df = pd.read_csv(f"results/{name}.csv")
-        ok = int(df["hash_ok"].sum())                                # True counts as 1
-        print(f"{name}: {ok} of {len(df)} transfers matched their SHA-256 hash")
+        df = pd.read_csv(f"results/{name}.csv")                      # raw: failed rows included
+        failed = int((~df["completed"].astype(bool)).sum()) if "completed" in df.columns else 0
+        ok = int((df["hash_ok"] == True).sum())                      # True counts as 1
+        print(f"{name}: {ok} of {len(df) - failed} completed transfers matched their "
+              f"SHA-256 hash ({failed} failed)")
+        if "error" in df.columns:
+            bad = int(df["error"].astype(str).str.contains("hash mismatch").sum())
+            if bad:
+                print(f"  WARNING: {bad} hash mismatch(es) in {name}")
 
+                
 if __name__ == "__main__":
     plot_goodput_vs_loss()
     plot_goodput_vs_window()
