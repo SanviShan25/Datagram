@@ -27,7 +27,8 @@ FACTORIES = {
 CONDITIONS = {
     "clean": {},
     "loss20": {"loss": 0.2},
-    "loss_dup_corrupt": {"loss": 0.2, "dup": 0.1, "corrupt": 0.1},  # T10 ka case
+    "loss_dup_corrupt": {"loss": 0.2, "dup": 0.1, "corrupt": 0.1},  # T10 case
+    "reorder_delay": {"reorder": 0.2, "reorder_delay": 0.05, "delay": 0.01, "jitter": 0.005},
 }
 
 
