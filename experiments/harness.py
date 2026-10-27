@@ -12,7 +12,7 @@ from datagram.protocols.stop_wait import StopAndWait
 from datagram.protocols.sr import SelectiveRepeat
 from datagram.rto import RTOEstimator
 
-# Column order of the CSV. Must match the dict run_trial returns.
+# Column order of the CSV. 
 FIELDS = ["protocol", "seed", "loss", "window", "reorder", "delay", "file_size",
           "rto", "reset_backoff", "elapsed_s", "goodput_bps", "packets_sent",
           "retransmissions", "hash_ok"]
