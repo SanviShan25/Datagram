@@ -2,11 +2,9 @@
 
 ## Project Overview
 
-Datagram is a Python project containing an adaptive retransmission-timeout (RTO) estimator. It updates a timeout from round-trip-time (RTT) samples using a smoothed RTT (SRTT) and RTT variation (RTTVAR), and applies exponential backoff after a timeout.
+Datagram is a Python project for reliable file transfer over UDP. UDP only sends bytes to an address; it does not promise delivery, order, uniqueness or integrity. Datagram adds those promises with sequence numbers, checksums, acknowledgements, timeouts and retransmission, using three swappable ARQ (Automatic Repeat reQuest) protocols: Stop-and-Wait, Go-Back-N and Selective Repeat. A seeded channel emulator injects loss, duplication, reordering, corruption and delay, so every protocol can be tested and compared under identical conditions. Each transfer is verified by comparing SHA-256 hashes of the source and received files. 
 
-The project also contains a file-transfer application over UDP with swappable ARQ (Automatic Repeat reQuest) protocols. A shared packet format with a CRC32 checksum, a seeded channel emulator, and a Stop-and-Wait protocol (sender and receiver) are implemented. Go-Back-N and Selective Repeat are in progress. Transfers are verified by comparing SHA-256 hashes of the source and received files. It is built for the Computer Networks course (project P3, Reliable Data Transfer over UDP)
-
-The RTO estimator is currently standalone: Stop-and-Wait uses a fixed timeout and is not yet connected to it.
+An adaptive retransmission-timeout (RTO) estimator (Jacobson/Karels, with Karn's rule) sets the timer from measured round-trip times. Stop-and-Wait and Selective Repeat use it through `est=`; Go-Back-N currently uses a fixed timeout.
 
 ## Features
 
@@ -15,30 +13,32 @@ The RTO estimator is currently standalone: Stop-and-Wait uses a fixed timeout an
 - Applies exponential backoff after a timeout.
 - Can use a fixed timeout that does not learn from RTT samples.
 - Includes a small executable demonstration in the estimator module.
--Reliable, in-order, byte-exact file delivery over UDP using Stop-and-Wait ARQ
--Receiver detects duplicates: they are re-ACKed but never written twice.
--Corrupt and truncated packets are detected by CRC32 and discarded.
--Seeded channel emulator, so lossy runs are reproducible (loss and corruption; duplication, delay and reordering are covered by tests/test_channel_v2.py).
--Uniform stats from every protocol: packets_sent, retransmissions, bytes_delivered, elapsed_s.
+- Reliable, in-order, byte-exact file delivery over UDP using Stop-and-Wait ARQ
+- Go-Back-N ARQ with a configurable sliding window, cumulative ACKs, a single timer for the oldest unACKed packet, and whole-window   retransmission on timeout. With window=1 it behaves like Stop-and-Wait.
+- Receiver detects duplicates: they are re-ACKed but never written twice.
+- Corrupt and truncated packets are detected by CRC32 and discarded.
+- Seeded channel emulator, so lossy runs are reproducible (loss and corruption; duplication, delay and reordering are covered by tests/test_channel_v2.py).
+- Uniform stats from every protocol: packets_sent, retransmissions, bytes_delivered, elapsed_s.
+- Adaptive RTO (Jacobson/Karels) with Karn’s rule and an optional backoff reset.
+- Selective Repeat ARQ with per-packet ACKs and timers and a receiver out-of-order buffer.
 
 ## Project Structure
-
 ```text
-Datagram/
-└── datagram/
-    ├── __init__.py   # Empty Python package marker
-    └── rto.py        # RTO estimator and executable demonstration
-```
 Datagram/
 ├── tests/
 │   ├── test_channel.py
 │   ├── test_channel_v2.py
+│   ├── test_gbn.py            # Go-Back-N tests: receiver, window, loss, seeds
 │   ├── test_loopback.py       # End-to-end transfers with hash check, seed sweep
 │   ├── test_packet.py
 │   ├── test_rto.py
 │   ├── test_sender_timeout.py # Sender with no receiver: retry limit and stats
 │   ├── test_split.py          # Chunking edge cases
-│   └── test_timers.py
+│   ├── test_timers.py
+│   ├── test_sr_sender.py       # Selective Repeat sender tests
+│   ├── test_sr_receiver.py     # Selective Repeat receiver tests
+│   └── test_sr_loopback.py     # Selective Repeat end-to-end transfers with hash check, seed sweep
+│
 └── datagram/
     ├── __init__.py   # Empty Python package marker
     ├── channel.py    # Channel emulator
@@ -47,9 +47,11 @@ Datagram/
     ├── protocols/
     │   ├── __init__.py
     │   ├── base.py       # ARQProtocol interface
+    │   ├── gbn.py        # Go-Back-N sender and receiver
+    │   ├── sr.py        # Selective Repeat sender, receiver and driver
     │   └── stop_wait.py  # Stop-and-Wait sender and receiver
     └── rto.py        # RTO estimator and executable demonstration
-
+``` 
 This structure reflects the project files present when this README was updated. No dependency manifest or build configuration is present. Tests are in tests/ and use pytest.
 
 ## Prerequisites
@@ -100,6 +102,18 @@ Main test files for Stop-and-Wait:
 -test_split.py: chunking of an empty file (no chunks), a 2500-byte file (1024 + 1024 + 452) and a 2048-byte file (two chunks, no stray empty chunk).
 -test_sender_timeout.py: with no receiver, the sender stops after exactly max_retries transmissions and raises TimeoutError.
 -test_loopback.py: real sender and receiver over the Channel, across file sizes 0, 1, 2048, 2500 and 50000 bytes and several loss/corruption settings, plus a 20-seed sweep. Each transfer is checked by SHA-256 hash and byte counts, and the test also asserts that the impairments fired and caused retransmissions. The full run takes about a minute because the receiver lingers briefly after each transfer.
+
+Main test file for Go-Back-N:
+
+test_gbn.py: covers the receiver (driven by hand, with no sender), the sender with a silent receiver (window limit, whole-window resend, giving up after max_retries), clean transfers including window=1 as the Stop-and-Wait case, and transfers under loss and corruption across several seeds, including lost ACKs. Run it alone with:
+
+```bash
+python -m pytest tests/test_gbn.py -v
+```
+Main test files for Selective Repeat:
+
+- test_sr_sender.py and test_sr_receiver.py: the window, per-packet deadlines, burst timeouts backing off once, and the receiver's three cases (below the window, inside it, beyond it).
+- test_sr_loopback.py: real transfers over the Channel with a SHA-256 match, including one lost packet leading to exactly one retransmission, lost ACKs, a lost final ACK, window sizes 1 to 16, 20% loss both ways across seeds, and loss, duplication, corruption and reordering together.
 
 ## Usage Example
 
@@ -152,6 +166,47 @@ stats = sender.send_file("src.bin")   # packets_sent, retransmissions, ...
 t.join()
 ```
 
+Note: in Stop-and-Wait and Selective Repeat the timeout comes from `est`. With no `est` it is adaptive and starts at 0.5 s. `rto=` only sets the receiver's linger time. For a fixed timeout pass `est=RTOEstimator(fixed=0.05)`.
+
+Go-Back-N transfer (same setup as above; only the class and the keyword-only window argument change):
+
+```python
+from datagram.protocols.gbn import GoBackN
+
+sender = GoBackN(
+    s_sock, Channel(s_sock, r_sock.getsockname(), seed=42, loss=0.2, corrupt=0.1),
+    window=8, rto=0.05, max_retries=60)
+receiver = GoBackN(
+    r_sock, Channel(r_sock, s_sock.getsockname(), seed=43, loss=0.2, corrupt=0.1),
+    window=8, rto=0.05, max_retries=60)
+```
+
+Selective Repeat transfer (same setup; `window` sets the window size):
+
+```python
+from datagram.protocols.sr import SelectiveRepeat
+
+sender = SelectiveRepeat(
+    s_sock, Channel(s_sock, r_sock.getsockname(), seed=42, loss=0.2),
+    window=8, rto=0.05)
+receiver = SelectiveRepeat(
+    r_sock, Channel(r_sock, s_sock.getsockname(), seed=43, loss=0.2),
+    window=8, rto=0.05)
+```
+
+## Adaptive RTO and Karn's Rule (`rto.py`, `timers.py`)
+
+- `RTOEstimator` turns measured round-trip times into a retransmission timeout (RFC 6298, Jacobson/Karels). The first sample sets SRTT = R and RTTVAR = R/2. After that, RTTVAR updates first and then SRTT (alpha = 1/8, beta = 1/4). RTO = SRTT + 4 x RTTVAR, clamped between `min_rto` and `max_rto`. Each timeout doubles the RTO (exponential backoff). `RTOEstimator(fixed=x)` is a fixed-timeout baseline that never learns.
+- `RTTTracker` sits between a protocol and the estimator and enforces Karn's rule: no RTT sample is taken from a retransmitted packet, because its ACK is ambiguous. A protocol calls `on_send(seq, now)` on every send and resend, `on_ack(seq, now)` when an ACK arrives, and `on_timeout(seq)` when a timer fires. If several packets time out together, pass `backoff=False` for all but the first so the RTO doubles once. `discard(seq)` forgets a packet without measuring it (for cumulative ACKs).
+- Optional `reset_on_retx_ack=True`: when a retransmitted packet is finally ACKed, the RTO returns to the formula value (still no sample). This is a deliberate deviation from textbook Karn. Without it, at 20-30% loss the backed-off RTO stays high and transfers slow down sharply or stall. The experiment results will quantify this.
+- Currently exposed by `SelectiveRepeat`; Stop-and-Wait and Go-Back-N will expose it with the adaptive-RTO change.
+
+## Selective Repeat (`protocols/sr.py`)
+
+- `SRSender`: the window is `[base, base + N)`. Every packet in flight has its own deadline. ACKs are per packet, and `base` slides past consecutive ACKed packets. On timeout only the expired packets are resent, and the RTO backs off once per burst.
+- `SRReceiver`, by sequence number: below the window, re-ACK it but never deliver it again. Inside the window, ACK it, buffer it if it is new, and deliver every consecutive packet starting at `rcv_base`. Beyond the window, ignore it.
+- `SelectiveRepeat(sock, channel, window=8, rto=0.5, est=None, ...)` has the same `send_file` / `receive_file` interface and stats as the other protocols. The FIN is the last packet, and the receiver lingers after it to re-ACK a lost FIN ACK.
+
 ## Packet Format and ACK Semantics
 
 *Status: proposed on 2026-10-12, pending confirmation from all four members. Remove this line once everyone has agreed.*
@@ -191,9 +246,20 @@ Stop-and-Wait Design Notes:
 -Windows. ConnectionResetError (WinError 10054) from recvfrom is treated as "no ACK yet".
 -Goodput. bytes_delivered / elapsed_s. The receiver's elapsed_s is measured up to the first ACK of the FIN, so lingering does not distort it.
 
+Go-Back-N Design Notes : 
+- Constructor. GoBackN(sock, channel, *, window=8, rto=0.5, max_retries=10, idle_timeout=5.0, linger=None). Everything after channel is keyword-only.
+- Sliding window. Up to window packets are in flight. base is the oldest unACKed packet and next_seq is the next packet to send for the first time. The FIN is the last packet (seq = len(chunks)) and goes through the window like any other packet.
+- Cumulative ACK. ack = N means every packet up to N arrived in order. The sender accepts only base <= ack < next_seq; an older or impossible ACK is ignored.
+- Receiver accepts only in-order packets. An in-order packet is written once and ACKed. An out-of-order packet or a duplicate is never written. The receiver re-ACKs the last in-order packet (expected - 1), not the duplicate's own seq. While nothing is in order yet (expected == 0), it sends no ACK.
+- One timer, for base. It starts when a packet is sent into an empty window and restarts when an ACK advances base (with packets still outstanding) and after a timeout resend. Duplicate or stale ACKs, junk and corrupt packets never touch it, so they cannot postpone a retransmission.
+- Timeout means "go back". The sender resends the whole outstanding window, base up to next_seq - 1, and each resent packet counts as one retransmission.
+max_retries differs from Stop-and-Wait. Here it counts consecutive timeouts without progress. It resets to 0 whenever base advances, and - TimeoutError is raised when the counter reaches max_retries, before resending.
+- Stats counting rule. packets_sent counts every transmission (on the receiver, every ACK sent). Sender retransmissions is one per   resent packet. Receiver retransmissions counts duplicates (seq < expected) and repeated FINs.
+- Linger, idle timeout and Windows handling work as in Stop-and-Wait. elapsed_s is measured before lingering.
+
 Known Limitations:
--Stop-and-Wait uses a fixed RTO and does not yet use RTOEstimator.
--Go-Back-N, Selective Repeat and the experiment runner are not complete yet.
+- Go-Back-N uses a fixed timeout; it does not use the RTO estimator yet.
+- The experiment runner is not complete yet.
 
 ## Contributors
 
@@ -202,18 +268,14 @@ Git commit history identifies these contributors:
 - Sanvi Shan
 - Shilpa Kumari
 - Samridhya Mukherjee
+- Akshita Singh
 
 ## Future Enhancements
 
-These are possible follow-up ideas, not features currently implemented:
-
 - Document the supported Python version and add project/dependency metadata.
-- Document the supported Python version and add project/dependency metadata.
-- Integrate the estimator with the ARQ protocols, starting with Stop-and-Wait.
-- Define how RTT samples from retransmitted packets should be handled.
--Implement Go-Back-N and Selective Repeat.
--Experiments: goodput versus loss rate, goodput versus window size, retransmissions versus reordering probability, sensitivity to RTO tuning.
--Stretch goals: SACK blocks, sliding-window flow control, connection setup and teardown, Nagle-style coalescing.
+- Adaptive RTO inside Go-Back-N.
+- Experiments: goodput versus loss rate, goodput versus window size, retransmissions versus reordering probability, sensitivity to RTO tuning.
+- Stretch goals: SACK blocks, sliding-window flow control, connection setup and teardown, Nagle-style coalescing.
 
 ## License
 
