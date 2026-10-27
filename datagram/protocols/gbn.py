@@ -4,6 +4,8 @@ import time
 from datagram.packet import Packet, DATA, ACK, FIN
 from datagram.protocols.base import ARQProtocol
 from datagram.protocols.stop_wait import split_file
+from datagram.rto import RTOEstimator
+from datagram.timers import RTTTracker
 
 
 class GoBackN(ARQProtocol):
@@ -12,16 +14,22 @@ class GoBackN(ARQProtocol):
     unACKed packet. window=1 behaves like Stop-and-Wait."""
 
     def __init__(self, sock, channel, *, window=8, rto=0.5, max_retries=10,
-                 idle_timeout=5.0, linger=None):
+                 idle_timeout=None, est=None, linger=None,
+                 reset_on_retx_ack=False):
         if window < 1:
             raise ValueError("window must be at least 1")
         self.sock = sock
         self.channel = channel
         self.window = window
+        self.est = est or RTOEstimator(initial_rto=rto)
+        self.tracker = RTTTracker(self.est, reset_on_retx_ack=reset_on_retx_ack)
         self.rto = rto
         # max_retries = consecutive timeouts WITHOUT progress before giving up.
         self.max_retries = max_retries
-        self.idle_timeout = idle_timeout
+        # Receiver: max silence before giving up. Defaults to 3x the largest
+        # RTO the estimator can back off to, so backoff cannot trip it early.
+        self.idle_timeout = (3 * self.est.max_rto if idle_timeout is None
+                             else idle_timeout)
         # Receiver: silence needed after the FIN before it stops re-ACKing.
         self.linger = 10 * rto if linger is None else linger
         self._reset_stats()
@@ -45,32 +53,25 @@ class GoBackN(ARQProtocol):
         self.channel.send(Packet(seq=0, ack=ack_number, flags=ACK).pack())
         self.stats["packets_sent"] += 1
 
-
     def _recv_packet(self, timeout):
         """Return a valid Packet, None for junk/reset, raise socket.timeout."""
         deadline = time.monotonic() + timeout
-
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise socket.timeout()
-
             try:
                 self.sock.settimeout(min(remaining, 0.005))
                 if hasattr(self.channel, "pump"):
-                    self.channel.pump()           # deliver any delayed ACKs now due
-
+                    self.channel.pump()   # deliver any delayed ACKs now due
                 data, _addr = self.sock.recvfrom(2048)
-
             except socket.timeout:
                 if time.monotonic() < deadline:
-                    continue                 # short poll expired, keep waiting
-                raise                        # the real deadline passed
-
+                    continue              # short poll expired, keep waiting
+                raise                     # the real deadline passed
             except ConnectionResetError:
-                return None                  # Windows: peer port was closed
-
-            return Packet.unpack(data)       # None if corrupt
+                return None               # Windows: peer port was closed
+            return Packet.unpack(data)    # None if corrupt
 
     # -------------------------------------------------------------- sender
     def send_file(self, path):
@@ -96,9 +97,10 @@ class GoBackN(ARQProtocol):
             # (a) Fill the window with first sends.
             while next_seq < total and next_seq < base + self.window:
                 self._transmit(packets[next_seq], False)
+                self.tracker.on_send(next_seq, time.monotonic())
                 if base == next_seq:
                     # Window was empty: this packet is now the oldest.
-                    deadline = time.monotonic() + self.rto
+                    deadline = time.monotonic() + self.est.current_rto()
                 next_seq += 1
 
             # (b) Time left for the oldest packet. Computed fresh every pass
@@ -113,9 +115,16 @@ class GoBackN(ARQProtocol):
                         f"no progress at base={base} after {timeouts} "
                         f"consecutive timeouts"
                     )
+                # Mark every packet in the window as retransmitted (Karn: no
+                # RTT sample from them). Only the oldest packet backs the RTO
+                # off, so one timeout doubles it once, not once per packet.
+                for seq in range(base, next_seq):
+                    self.tracker.on_timeout(seq, backoff=(seq == base))
                 for seq in range(base, next_seq):
                     self._transmit(packets[seq], True)
-                deadline = time.monotonic() + self.rto   # restart the timer
+                    self.tracker.on_send(seq, time.monotonic())
+                # Restart AFTER the backoff, so the new deadline uses it.
+                deadline = time.monotonic() + self.est.current_rto()
                 continue
 
             # (d) Wait for an ACK, but only for the time that is left.
@@ -133,11 +142,18 @@ class GoBackN(ARQProtocol):
 
             # Cumulative ACK: accept only base <= ack < next_seq.
             if base <= reply.ack < next_seq:
+                # Packets below reply.ack are covered by the cumulative ACK:
+                # drop them from the tracker (no RTT sample from them).
+                for seq in range(base, reply.ack):
+                    self.tracker.discard(seq)
+                # The ACKed packet itself may feed the RTO estimator
+                # (tracker skips it if it was ever retransmitted: Karn).
+                self.tracker.on_ack(reply.ack, time.monotonic())
                 base = reply.ack + 1      # window slides
                 timeouts = 0              # progress resets the counter
                 if base < next_seq:
                     # Packets still outstanding: restart for the new oldest.
-                    deadline = time.monotonic() + self.rto
+                    deadline = time.monotonic() + self.est.current_rto()
             # else: stale or impossible ACK -> ignore, timer untouched.
 
         elapsed = time.monotonic() - start
