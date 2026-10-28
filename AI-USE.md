@@ -87,3 +87,4 @@ Used Claude to understand how to turn the CSVs into the proposal's outputs, why 
 
 - 27 Oct, 2026 (Sanvi): README sections "Handwritten CRC-32" and "Channel Emulator" were drafted by Claude from my code; I checked them against `packet.py` and `channel.py` and corrected the packet-format section (removed the outdated proposal status line, updated the checksum row).
 
+- 27-28 Oct, 2026 (Sanvi): README sections "Handwritten CRC-32" and "Channel Emulator" and the updates to the feature list, project structure and test instructions were drafted by Claude from my code, and I checked them against packet.py, channel.py and test_transfer.py. The adaptive-RTO clean-network test in tests/test_transfer.py was structured by Claude; I ran it. A longer adaptive-RTO test under 20 percent loss gave TimeoutErrors and took 47 minutes, so I did not commit it.
