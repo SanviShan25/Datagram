@@ -63,7 +63,7 @@ Used Gemini and Claude to learn Selective Repeat and to review the team's code. 
 
 ## 22 Oct, 2026 — Sanvi (handwritten CRC-32)
 
-- Shilpa pointed out that `packet.py` used `zlib.crc32`, which is a library call, and our proposal listed no libraries for this. I decided to replace it.
+- Shilpa pointed python3 -m pytest tests/test_transfer.py -qout that `packet.py` used `zlib.crc32`, which is a library call, and our proposal listed no libraries for this. I decided to replace it.
 - Claude provided a table-driven CRC-32 (`crc32()` in `packet.py`) and two tests. One checks the standard test vector, the other compares against `zlib.crc32` as a reference only. I integrated it, fixed a misplaced-import error in `tests/test_packet.py`, and ran all tests (42 passed).
 
 ## 27 Oct, 2026 — Sanvi (end-to-end transfer tests)
@@ -73,3 +73,5 @@ Used Gemini and Claude to learn Selective Repeat and to review the team's code. 
 - My own work: running and debugging every test, the git workflow, finding and reporting the empty `protocols/` folder to the team, coordinating the `pump()` note for the channel, and verifying every file that I committed.
 
 - 27 Oct, 2026 (Sanvi): README sections "Handwritten CRC-32" and "Channel Emulator" were drafted by Claude from my code; I checked them against `packet.py` and `channel.py` and corrected the packet-format section (removed the outdated proposal status line, updated the checksum row).
+
+- 27-28 Oct, 2026 (Sanvi): README sections "Handwritten CRC-32" and "Channel Emulator" and the updates to the feature list, project structure and test instructions were drafted by Claude from my code, and I checked them against packet.py, channel.py and test_transfer.py. The adaptive-RTO clean-network test in tests/test_transfer.py was structured by Claude; I ran it. A longer adaptive-RTO test under 20 percent loss gave TimeoutErrors and took 47 minutes, so I did not commit it.
