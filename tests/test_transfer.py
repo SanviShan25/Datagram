@@ -1,4 +1,5 @@
 import hashlib
+import inspect
 import socket
 import threading
 
@@ -75,4 +76,24 @@ def transfer(tmp_path, make, data, seed, **chan):
 def test_file_arrives_intact(tmp_path, proto, cond, seed, size):
     data = bytes((i * 7) % 251 for i in range(size))
     src, dst = transfer(tmp_path, FACTORIES[proto], data, seed, **CONDITIONS[cond])
+    assert sha(src) == sha(dst)
+
+
+# Adaptive RTO (default estimator, no fixed RTO) on a clean network.
+# Go-Back-N is skipped until it exposes the est argument. Adaptive RTO under
+# heavy loss is measured by the experiments, not asserted here.
+@pytest.mark.parametrize("size", [0, 1025, 5000])
+@pytest.mark.parametrize("seed", [1, 2])
+@pytest.mark.parametrize("proto", ["stop_and_wait", "go_back_n", "selective_repeat"])
+def test_adaptive_rto_clean_file_arrives_intact(tmp_path, proto, seed, size):
+    cls = {"stop_and_wait": StopAndWait, "go_back_n": GoBackN,
+           "selective_repeat": SelectiveRepeat}[proto]
+    params = inspect.signature(cls.__init__).parameters
+    if "est" not in params:
+        pytest.skip(f"{proto} does not expose adaptive RTO yet (fixed timeout)")
+    kw = {"rto": RTO, "max_retries": RETRIES, "linger": LINGER}
+    if "window" in params:
+        kw["window"] = 8
+    data = bytes((i * 7) % 251 for i in range(size))
+    src, dst = transfer(tmp_path, lambda s, ch: cls(s, ch, **kw), data, seed)
     assert sha(src) == sha(dst)
