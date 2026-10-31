@@ -21,7 +21,7 @@ class GoBackN(ARQProtocol):
         self.sock = sock
         self.channel = channel
         self.window = window
-        self.est = est or RTOEstimator(initial_rto=rto)
+        self.est = est or RTOEstimator(fixed=rto)
         self.tracker = RTTTracker(self.est, reset_on_retx_ack=reset_on_retx_ack)
         self.rto = rto
         # max_retries = consecutive timeouts WITHOUT progress before giving up.
