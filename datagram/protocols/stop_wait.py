@@ -26,17 +26,18 @@ def split_file(path, chunk_size=CHUNK):
 
 class StopAndWait(ARQProtocol):
     def __init__(self, sock, channel, rto=0.5, max_retries=10,
-                 idle_timeout=5.0, linger=None, est=None):
+                 idle_timeout=None, linger=None, est=None, reset_on_retx_ack=False):
         self.sock = sock
         self.channel = channel            # anything with .send(bytes)
-        self.est = est or RTOEstimator()          # sender: RTT estimator for adaptive RTO
-        self.tracker = RTTTracker(self.est)
+        self.est = est or RTOEstimator(initial_rto=rto)          # sender: RTT estimator for adaptive RTO
+        self.tracker = RTTTracker(self.est, reset_on_retx_ack=reset_on_retx_ack)
         self.rto = rto                    # seconds, fixed for now
         self.max_retries = max_retries    # total transmissions per packet
         self.idle_timeout = idle_timeout  # receiver: max silence before giving up
         # Receiver: after the FIN, stay up until this much SILENCE has passed,
         # re-ACKing repeated FINs. The window slides: each repeated FIN restarts
         # it. 10*rto means ~10 consecutive lost FINs are needed to strand the sender.
+        self.idle_timeout = 3 * self.est.max_rto if idle_timeout is None else idle_timeout
         self.linger = 10 * rto if linger is None else linger
         self._reset_stats()
 
