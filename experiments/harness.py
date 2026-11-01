@@ -33,16 +33,14 @@ def sha256_of(path):
 
 def make_protocol(name, sock, chan, window=8, rto=0.1, adaptive=False, reset=False):
     # ALL three protocols are built here, so fixed vs adaptive can't differ
-    # by accident. The catch: rto means different things.
-    # Case: gbn -> rto IS the timeout
-    # Case: sw / sr -> rto only sets the linger, the timeout comes from est
+    # by accident. For all three, the timeout comes from the estimator (est);
+    # rto only sets the linger. Fixed -> RTOEstimator(fixed=rto).
     est = RTOEstimator(min_rto=0.05) if adaptive else RTOEstimator(fixed=rto)
 
     if name == "gbn":
         from datagram.protocols.gbn import GoBackN   # imported here, only when asked for
-        assert not adaptive, "GoBackN has no adaptive RTO"
-        assert not reset, "reset_on_retx_ack exists only in Selective Repeat"
-        return GoBackN(sock, chan, window=window, rto=rto, max_retries=60)
+        return GoBackN(sock, chan, window=window, rto=rto, max_retries=60,
+                       est=est, reset_on_retx_ack=reset)
     if name == "sw":
         assert not reset, "reset_on_retx_ack exists only in Selective Repeat"
         return StopAndWait(sock, chan, rto=rto, max_retries=60, est=est)
@@ -57,7 +55,7 @@ def check_timeout(name, proto, rto, adaptive):
     # asked for, because the graph would compare unequal things.
     if adaptive:
         return                                   # adaptive learns its own, nothing to check
-    used = proto.rto if name == "gbn" else proto.est.current_rto()
+    used = proto.est.current_rto()
     assert used == rto, f"{name} uses timeout {used}, expected fixed {rto}"
 
 
