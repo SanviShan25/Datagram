@@ -4,7 +4,7 @@
 
 Datagram is a Python project for reliable file transfer over UDP. UDP only sends bytes to an address; it does not promise delivery, order, uniqueness or integrity. Datagram adds those promises with sequence numbers, checksums, acknowledgements, timeouts and retransmission, using three swappable ARQ (Automatic Repeat reQuest) protocols: Stop-and-Wait, Go-Back-N and Selective Repeat. A seeded channel emulator injects loss, duplication, reordering, corruption and delay, so every protocol can be tested and compared under identical conditions. Each transfer is verified by comparing SHA-256 hashes of the source and received files.
 
-An adaptive retransmission-timeout (RTO) estimator (Jacobson/Karels, with Karn's rule) sets the timer from measured round-trip times. All three protocols accept an estimator through est=. Stop-and-Wait defaults to the adaptive estimator; Go-Back-N defaults to a fixed timeout (RTOEstimator(fixed=rto)) so the fixed-timeout experiments stay comparable, and adaptive RTO is opt-in there.
+An adaptive retransmission-timeout (RTO) estimator (Jacobson/Karels, with Karn's rule) sets the timer from measured round-trip times. All three protocols accept an estimator through `est=` . Stop-and-Wait defaults to the adaptive estimator; Go-Back-N defaults to a fixed timeout (`RTOEstimator(fixed=rto)`) so the fixed-timeout experiments stay comparable, and adaptive RTO is opt-in there.
 
 ## Features
 
@@ -218,7 +218,8 @@ receiver = SelectiveRepeat(
 - `RTOEstimator` turns measured round-trip times into a retransmission timeout (RFC 6298, Jacobson/Karels). The first sample sets SRTT = R and RTTVAR = R/2. After that, RTTVAR updates first and then SRTT (alpha = 1/8, beta = 1/4). RTO = SRTT + 4 x RTTVAR, clamped between `min_rto` and `max_rto`. Each timeout doubles the RTO (exponential backoff). `RTOEstimator(fixed=x)` is a fixed-timeout baseline that never learns.
 - `RTTTracker` sits between a protocol and the estimator and enforces Karn's rule: no RTT sample is taken from a retransmitted packet, because its ACK is ambiguous. A protocol calls `on_send(seq, now)` on every send and resend, `on_ack(seq, now)` when an ACK arrives, and `on_timeout(seq)` when a timer fires. If several packets time out together, pass `backoff=False` for all but the first so the RTO doubles once. `discard(seq)` forgets a packet without measuring it (for cumulative ACKs).
 - Optional `reset_on_retx_ack=True`: when a retransmitted packet is finally ACKed, the RTO returns to the formula value (still no sample). This is a deliberate deviation from textbook Karn. Without it, at 20-30% loss the backed-off RTO stays high and transfers slow down sharply or stall. The experiment results will quantify this.
-- Exposed by all three protocols through est= and reset_on_retx_ack=. Go-Back-N uses a fixed timeout unless you pass an adaptive RTOEstimator. Under heavy loss, adaptive Go-Back-N should use reset_on_retx_ack=True (see Known Limitations).
+- Exposed by all three protocols through `est=` and `reset_on_retx_ack=`. Go-Back-N uses a fixed timeout unless you pass an adaptive `RTOEstimator` . Under heavy loss, adaptive Go-Back-N should use `reset_on_retx_ack=True` (see Known Limitations).
+
 ## Selective Repeat (`protocols/sr.py`)
 
 - `SRSender`: the window is `[base, base + N)`. Every packet in flight has its own deadline. ACKs are per packet, and `base` slides past consecutive ACKed packets. On timeout only the expired packets are resent, and the RTO backs off once per burst.
@@ -293,12 +294,12 @@ Limitations: corruption flips exactly one bit, which CRC-32 always detects, so u
 
 ### Go-Back-N Design Notes
 
-- Constructor. GoBackN(sock, channel, *, window=8, rto=0.5, max_retries=10, idle_timeout=None, est=None, linger=None, reset_on_retx_ack=False).  Everything after channel is keyword-only.
+- Constructor. GoBackN(sock, channel, *, window=8, rto=0.5, max_retries=10, idle_timeout=None, est=None, linger=None, reset_on_retx_ack=False). Everything after channel is keyword-only.
 - Sliding window. Up to window packets are in flight. base is the oldest unACKed packet and next_seq is the next packet to send for the first time. The FIN is the last packet (seq = len(chunks)) and goes through the window like any other packet.
 - Cumulative ACK. ack = N means every packet up to N arrived in order. The sender accepts only base <= ack < next_seq; an older or impossible ACK is ignored.
 - Receiver accepts only in-order packets. An in-order packet is written once and ACKed. An out-of-order packet or a duplicate is never written. The receiver re-ACKs the last in-order packet (expected - 1), not the duplicate's own seq. While nothing is in order yet (expected == 0), it sends no ACK.
 - One timer, for base. It starts when a packet is sent into an empty window and restarts when an ACK advances base (with packets still outstanding) and after a timeout resend. Duplicate or stale ACKs, junk and corrupt packets never touch it, so they cannot postpone a retransmission.
-- Retransmission timeout. By default est is a fixed timeout, RTOEstimator(fixed=rto). Pass an adaptive estimator to time packets through RTTTracker (Karn’s rule). On a timeout only the oldest packet backs off (backoff=(seq == base)), and cumulative ACKs discard the packets they cover without measuring them. idle_timeout defaults to 3 * est.max_rto and linger to 10 * rto.
+- Retransmission timeout. By default est is a fixed timeout, RTOEstimator(fixed=rto). Pass an adaptive estimator to time packets through RTTTracker (Karn's rule). On a timeout only the oldest packet backs off (backoff=(seq == base)), and cumulative ACKs discard the packets they cover without measuring them. idle_timeout defaults to 3 * est.max_rto and linger to 10 * rto.
 - Timeout means "go back". The sender resends the whole outstanding window, base up to next_seq - 1, and each resent packet counts as one retransmission.
 - max_retries differs from Stop-and-Wait. Here it counts consecutive timeouts without progress. It resets to 0 whenever base advances, and TimeoutError is raised when the counter reaches max_retries, before resending.
 - Stats counting rule. packets_sent counts every transmission (on the receiver, every ACK sent). Sender retransmissions is one per resent packet. Receiver retransmissions counts duplicates (seq < expected) and repeated FINs.
@@ -357,7 +358,7 @@ Every completed transfer is verified by SHA-256 hash, and `plots.py` reports any
 
 ## Known Limitations
 
-- Go-Back-N defaults to a fixed timeout; adaptive RTO is opt-in via est=, and the experiments run it fixed. With adaptive RTO under heavy loss, the receiver’s default linger (10 x rto) can expire before a backed-off sender retries. Use reset_on_retx_ack=True or a larger linger.
+- Go-Back-N defaults to a fixed timeout; adaptive RTO is opt-in via est=, and the experiments run it fixed. With adaptive RTO under heavy loss, the receiver's default linger (10 x rto) can expire before a backed-off sender retries. Use reset_on_retx_ack=True or a larger linger.
 - Experiments run on loopback with an emulated channel, so they compare relative goodput between protocols, not absolute network performance.
 
 ## Contributors
